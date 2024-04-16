@@ -1,0 +1,411 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:nishas_yoga/Views/Admin/Fees/fees_collection_page.dart';
+import 'package:nishas_yoga/Views/Admin/Fees/pay_fees_page.dart';
+import 'package:nishas_yoga/Widget/Loading_Widget.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+import '../../../Schema/FeesCollection.dart';
+import '../../../Schema/User.dart';
+
+class FeesRemainderPage extends StatefulWidget {
+  const FeesRemainderPage({super.key});
+
+  @override
+  _FeesRemainderPageState createState() => _FeesRemainderPageState();
+}
+
+class _FeesRemainderPageState extends State<FeesRemainderPage> {
+  bool isLoading = true; // Initialize loading state as true
+  List<FeesCollection> feesData = []; // Initialize as an empty list
+  List<User> userData = []; // Initialize as an empty list
+  String? errorMessage;
+  List<User> searchedUsers = [];
+  late User selectedUser;
+
+  void _showErrorDialog(dynamic error) {
+    print('Caught error type: ${error.runtimeType}');
+    String errorMessage = 'An error occurred. Please try again.';
+
+    if (error is String) {
+      // Check if the error message indicates no fee collections found
+      if (error.contains('No Fee Collections found')) {
+        errorMessage = 'No Fees is supposed to be collected';
+      } else {
+        errorMessage = error;
+      }
+    } else if (error is FormatException) {
+      errorMessage = 'Invalid data format. Please check your input.';
+    } else if (error is TimeoutException) {
+      errorMessage = 'Request timed out. Please try again later.';
+    } else if (error is SocketException) {
+      errorMessage = 'Network error. Please check your internet connection.';
+    } else if (error is http.ClientException) {
+      errorMessage = 'HTTP client error. Please try again.';
+    } else if (error is http.Response) {
+      // Handle HTTP response errors
+      errorMessage = 'Failed to load data. Status code: ${error.statusCode}';
+    }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Error'),
+          content: Text(errorMessage),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void updateApprovalStatus(FeesCollection feesCollection) async {
+    final url = Uri.parse(
+        'http://app.nishasyoga.com/FeesCollection.php'); // Change this to the URL of your PHP script
+    try {
+      setState(() {
+        isLoading = true;
+      });
+      final String ApprovalID = 1.toString();
+      final String ClientID = feesCollection.clientID.toString();
+      final Map<String, String> body = {
+        'ApprovalID': ApprovalID,
+        'ClientID': ClientID,
+        'WannaUpdateNigga': 'Yes'
+      };
+      final response = await http.put(url, body: json.encode(body));
+
+      if (response.statusCode == 200) {
+        print('Record updated successfully');
+        // You can show a success message or perform any other actions here
+      } else {
+        print('Failed to update record. Error: ${response.body}');
+        // Handle error scenario here
+      }
+    } catch (e) {
+      print('Exception occurred: $e');
+      // Handle exception scenario here
+    }
+  }
+
+  Future<void> fetchDataFromServer() async {
+    final url = Uri.parse('https://app.nishasyoga.com/FeesCollection.php?FeesRemainder=Yes');
+
+    try {
+      setState(() {
+        isLoading = true;
+      });
+      final response = await http.get(url);
+      print(response.body);
+
+      if (response.statusCode == 200) {
+        final dynamic responseData = json.decode(response.body);
+
+        if (responseData is Map<String, dynamic> &&
+            responseData.containsKey('message') &&
+            responseData['message'] == 'No Fee Collections found') {
+        } else if (responseData is List<dynamic>) {
+          // If fee collections are found, update the feesData list
+          setState(() {
+            feesData = responseData
+                .map((data) => FeesCollection.fromJson(data))
+                .toList();
+          });
+        } else {
+          // Handle unexpected response format
+          _showErrorDialog('Unexpected response format');
+        }
+      } else {
+        // Handle HTTP errors
+        _showErrorDialog(
+            'Failed to load data. Status code: ${response.statusCode}');
+      }
+    } catch (error) {
+      // Handle other errors
+      _showErrorDialog('Error fetching data: $error');
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> fetchClientDataFromServer(int index) async {
+    final url =
+        Uri.parse('https://app.nishasyoga.com/register.php?clientID=$index');
+
+    try {
+      setState(() {
+        isLoading = true;
+      });
+      print('Fetching data from server...'); // Debug statement
+      final response = await http.get(url);
+      print(response.body);
+      if (response.statusCode == 200) {
+        final dynamic responseData = json.decode(response.body);
+
+        if (responseData is Map<String, dynamic> &&
+            responseData.containsKey('message') &&
+            responseData['message'] == 'No User found') {
+          print('No users found.'); // Debug statement
+        } else if (responseData is List<dynamic> && responseData.isNotEmpty) {
+          // If user data is found, parse it and assign it to selectedUser
+          final Map<String, dynamic> userDataMap =
+              Map<String, dynamic>.from(responseData.first);
+          setState(() {
+            print(userDataMap);
+            selectedUser = _parseUserData(userDataMap);
+          });
+
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PayFeesPage(
+                user: selectedUser,
+              ), // Replace AnotherPage with the page you want to navigate to
+            ),
+          );
+        } else {
+          // Handle unexpected response format
+          _showErrorDialog('Unexpected response format');
+        }
+      } else {
+        // Handle HTTP errors
+        _showErrorDialog(
+            'Failed to load data. Status code: ${response.statusCode}');
+      }
+    } catch (error) {
+      // Handle other errors
+      _showErrorDialog('Error fetching data: $error');
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+      print('Fetch operation complete.'); // Debug statement
+    }
+  }
+
+  User _parseUserData(dynamic data) {
+    try {
+      print('Data received for parsing: $data');
+      return User.fromJson(data);
+    } catch (error, stackTrace) {
+      // Extract the problematic key causing the error
+      final key = _extractProblematicKey(data);
+      print('Error parsing JSON. Key causing the error: $key');
+      print('Error details: $error');
+      print('Stack trace: $stackTrace');
+      rethrow;
+    }
+  }
+
+  String _extractProblematicKey(dynamic data) {
+    // Iterate through each key in the data and try parsing it
+    for (final key in data.keys) {
+      try {
+        // Try parsing the value corresponding to the key
+        final value = data[key];
+        // If parsing fails, return the problematic key
+        User.fromJson(value);
+      } catch (_) {
+        return key;
+      }
+    }
+    // If no problematic key is found, return an empty string
+    return '';
+  }
+
+  Future<void> _refreshData() async {
+    // Implement your logic to refresh data here
+    fetchDataFromServer();
+  }
+
+  String formatDate(DateTime dateTime) {
+    return '${dateTime.year}-${dateTime.month}-${dateTime.day}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    fetchDataFromServer();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Fees Collection',
+          style: TextStyle(color: Colors.white),
+        ),
+        backgroundColor: Colors.brown,
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => const FeesCollectionPage(),
+            ),
+          );
+        },
+        backgroundColor: Colors.brown,
+        child: const Icon(
+          Icons.add,
+          color: Colors.white,
+        ),
+      ),
+      body: isLoading
+          ? const LoadingWidget()
+          : feesData.isEmpty
+              ? Center(
+                  child: Text(
+                    errorMessage ?? 'No Fees is supposed to be collected',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _refreshData,
+                  child: ListView.builder(
+                    itemCount: feesData.length,
+                    itemBuilder: (context, index) {
+                      return Dismissible(
+                        key: UniqueKey(),
+                        direction: DismissDirection.startToEnd,
+                        onDismissed: (direction) {
+                          showDialog(
+                            context: context,
+                            builder: (BuildContext context) {
+                              return AlertDialog(
+                                title: const Text('Alert'),
+                                content: const Text('Card dismissed.'),
+                                actions: <Widget>[
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                    },
+                                    child: const Text('OK'),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                        background: Container(
+                          color: Colors.red,
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        child: Card(
+                          elevation: 4,
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: ListTile(
+                              onTap: () {
+                                fetchClientDataFromServer(
+                                    int.parse(feesData[index].clientID!));
+                              },
+                              title: Text(
+                                '${feesData[index].clientID} ${feesData[index].clientFirstName} ${feesData[index].clientLastName}',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              subtitle: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Column(
+                                    children: [
+                                      Icon(
+                                        Icons.person,
+                                        size: 60, // Adjusted icon size
+                                        color: Colors.blue,
+                                      ),
+                                    ],
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Mobile: ${feesData[index].clientMobile}',
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                        Text(
+                                          'Fee Type: ${feesData[index].feesName}',
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                        if (feesData[index].coupleFirstName !=
+                                                null &&
+                                            feesData[index].coupleLastName !=
+                                                null)
+                                          Text(
+                                            'Couple Name: ${feesData[index].coupleFirstName} ${feesData[index].coupleLastName}',
+                                            style:
+                                                const TextStyle(fontSize: 16),
+                                          ),
+                                        if (feesData[index].passOnFirstName !=
+                                                null &&
+                                            feesData[index].passOnLastName !=
+                                                null)
+                                          Text(
+                                            'Pass On Name: ${feesData[index].passOnFirstName} ${feesData[index].passOnLastName}',
+                                            style:
+                                                const TextStyle(fontSize: 16),
+                                          ),
+                                        if (feesData[index]
+                                                    .passOnApprovalFirstName !=
+                                                null &&
+                                            feesData[index]
+                                                    .passOnApprovalLastName !=
+                                                null)
+                                          Text(
+                                            'Pass On Approval Name: ${feesData[index].passOnApprovalFirstName} ${feesData[index].passOnApprovalLastName}',
+                                            style:
+                                                const TextStyle(fontSize: 16),
+                                          ),
+                                        if (feesData[index].membershipChange !=
+                                            null)
+                                          Text(
+                                            'Membership Change: ${feesData[index].membershipChange}',
+                                            style:
+                                                const TextStyle(fontSize: 16),
+                                          ),
+                                        Text(
+                                          'Paid On: ${DateFormat('dd-MMM-yyyy').format(DateTime.parse(feesData[index].cDate!))}',
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                        Text(
+                                          'Due Date: ${DateFormat('dd-MMM-yyyy').format(DateTime.parse(feesData[index].newDate!))}',
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+    );
+  }
+}
